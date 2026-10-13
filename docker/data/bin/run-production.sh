@@ -65,6 +65,19 @@ elif [ -f "$CONFIG_FILE" ] && [ "${AMPACHE_AUTO_UPDATE_DB:-1}" = "1" ]; then
     php "$APP_DIR/bin/cli" admin:updateDatabase -e || true
 fi
 
+# Heresy: behind a TLS proxy Ampache guesses local_web_path as https://<domain>:80, which the proxy
+# Heresy: rejects; Subsonic/API streams fetch that URL from inside the container, so point it at
+# Heresy: apache directly. An uncommented local_web_path in the config is left untouched.
+if [ -f "$CONFIG_FILE" ] && ! grep -q '^local_web_path' "$CONFIG_FILE"; then
+    LOCAL_WEB_PATH="${AMPACHE_LOCAL_WEB_PATH:-http://localhost}"
+    echo "=> Setting local_web_path to ${LOCAL_WEB_PATH}"
+    if grep -q '^;local_web_path' "$CONFIG_FILE"; then
+        sed -i "s|^;local_web_path = .*|local_web_path = \"${LOCAL_WEB_PATH}\"|" "$CONFIG_FILE"
+    else
+        printf '\nlocal_web_path = "%s"\n' "$LOCAL_WEB_PATH" >> "$CONFIG_FILE"
+    fi
+fi
+
 chown -R www-data:www-data /var/log/ampache "$CONFIG_DIR" 2>/dev/null || true
 
 echo "=> Starting services"
