@@ -1,0 +1,23 @@
+# Heresy: keep the build context small and never ship local state or secrets into the image
+.git
+.github
+.claude
+.idea
+.vscode
+.env
+node_modules
+vendor
+public/dist
+public/lib/components
+resources/images/material-symbols
+config/ampache.cfg.php
+config/ampache.cfg.php.backup
+docker/log
+docker/media
+tests
+build
+storage
+tmp
+log
+logs
+*.log

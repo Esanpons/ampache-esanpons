@@ -1,0 +1,107 @@
+# Heresy: production image for Ampache (develop) - the code is baked into the image instead of
+# Heresy: bind-mounted, so it can be deployed from git by Dokploy / any docker host.
+
+# Heresy: stage 1 - build the frontend assets (vite bundle + npm components copied into public/)
+FROM node:22-bookworm-slim AS assets
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund --ignore-scripts
+COPY . .
+RUN npm run postinstall \
+    && npm run build \
+    && npm run verify:install
+
+# Heresy: stage 2 - apache + php runtime
+FROM debian:stable-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+ARG PHPVERSION=8.5
+
+RUN     apt-get -q -q update \
+    &&  apt-get -q -q -y install --no-install-recommends wget lsb-release ca-certificates extrepo \
+    &&  extrepo enable sury \
+    &&  apt-get update \
+    &&  apt-get -q -q -y install --no-install-recommends \
+          apache2 \
+          beets \
+          ffmpeg \
+          flac \
+          git \
+          graphicsmagick-imagemagick-compat \
+          lame \
+          libavcodec-extra \
+          locales \
+          default-mysql-client \
+          php${PHPVERSION} \
+          php${PHPVERSION}-ctype \
+          php${PHPVERSION}-curl \
+          php${PHPVERSION}-dom \
+          php${PHPVERSION}-gd \
+          php${PHPVERSION}-gettext \
+          php${PHPVERSION}-gmp \
+          php${PHPVERSION}-http \
+          php${PHPVERSION}-iconv \
+          php${PHPVERSION}-intl \
+          php${PHPVERSION}-ldap \
+          php${PHPVERSION}-mbstring \
+          php${PHPVERSION}-mysql \
+          php${PHPVERSION}-pdo \
+          php${PHPVERSION}-simplexml \
+          php${PHPVERSION}-sockets \
+          php${PHPVERSION}-xml \
+          php${PHPVERSION}-xmlreader \
+          php${PHPVERSION}-xmlwriter \
+          php${PHPVERSION}-zip \
+          supervisor \
+          vorbis-tools \
+          unzip \
+    &&  update-alternatives --set php /usr/bin/php${PHPVERSION} \
+    &&  phpenmod -v ${PHPVERSION} xml \
+    &&  rm -rf /var/www/html/* /etc/apache2/sites-enabled/* \
+    &&  mkdir -p /var/log/ampache /var/log/supervisor /media \
+    &&  a2enmod rewrite headers \
+    &&  sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen \
+    &&  locale-gen \
+    &&  apt-get -qq purge extrepo lsb-release wget \
+    &&  apt-get -qq autoremove \
+    &&  rm -rf /var/lib/apt/lists/*
+
+COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
+
+WORKDIR /var/www/html
+
+# Heresy: install php dependencies first so this layer is cached between code changes
+COPY composer.json composer.lock ./
+RUN composer install --no-dev --prefer-dist --no-interaction --no-progress --no-scripts --no-autoloader
+
+COPY . .
+COPY --from=assets /app/public/dist public/dist
+COPY --from=assets /app/public/lib/components public/lib/components
+COPY --from=assets /app/resources/images/material-symbols resources/images/material-symbols
+
+RUN composer dump-autoload --no-dev --optimize --no-scripts \
+    &&  for sub in "" "play/" "rest/" "jellyfin/"; do \
+            cp "public/${sub}.htaccess.dist" "public/${sub}.htaccess"; \
+        done \
+    &&  mkdir -p /usr/local/share/ampache \
+    &&  cp -a config /usr/local/share/ampache/config-dist \
+    &&  chown -R www-data:www-data config /var/log/ampache
+
+COPY docker/data/bin/apache2.sh docker/data/bin/run-production.sh /usr/local/bin/
+COPY docker/data/sites-enabled/001-ampache-production.conf /etc/apache2/sites-available/001-ampache.conf
+COPY docker/data/conf.d/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY docker/data/php/99-ampache-production.ini /etc/php/${PHPVERSION}/apache2/conf.d/99-ampache-production.ini
+COPY docker/data/php/99-ampache-production.ini /etc/php/${PHPVERSION}/cli/conf.d/99-ampache-production.ini
+
+# Heresy: strip CR line endings (Windows checkouts) so the scripts run
+RUN     sed -i 's/\r$//' /usr/local/bin/*.sh \
+    &&  chmod +x /usr/local/bin/*.sh \
+    &&  ln -s /etc/apache2/sites-available/001-ampache.conf /etc/apache2/sites-enabled/
+
+VOLUME ["/var/www/html/config", "/var/log/ampache"]
+EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+    CMD php -r 'exit(@fsockopen("127.0.0.1", 80) ? 0 : 1);'
+
+CMD ["run-production.sh"]

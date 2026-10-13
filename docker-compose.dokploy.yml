@@ -1,0 +1,53 @@
+# Heresy: production stack for Dokploy (Compose service). Set the variables in Dokploy's
+# Heresy: "Environment" tab and attach the domain to service "ampache", port 80, in "Domains".
+# Heresy: No host ports are published: Traefik reaches the container over dokploy-network.
+
+services:
+  ampache:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.production
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "80"
+    volumes:
+      - ampache-config:/var/www/html/config
+      - ampache-log:/var/log/ampache
+      # Heresy: point MEDIA_PATH at your music folder on the server; add a catalog at /media
+      - ${MEDIA_PATH:-../files/media}:/media
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-ampache}
+      DB_USER: root
+      DB_PASSWORD: ${DB_ROOT_PASSWORD:?set DB_ROOT_PASSWORD}
+      AMPACHE_DB_USER: ${AMPACHE_DB_USER:-ampache}
+      AMPACHE_DB_PASSWORD: ${AMPACHE_DB_PASSWORD:?set AMPACHE_DB_PASSWORD}
+      AMPACHE_ADMIN_USER: ${AMPACHE_ADMIN_USER:-admin}
+      AMPACHE_ADMIN_PASSWORD: ${AMPACHE_ADMIN_PASSWORD:?set AMPACHE_ADMIN_PASSWORD}
+      AMPACHE_ADMIN_EMAIL: ${AMPACHE_ADMIN_EMAIL:-admin@example.com}
+      AMPACHE_AUTO_UPDATE_DB: ${AMPACHE_AUTO_UPDATE_DB:-1}
+
+  db:
+    image: mariadb:lts
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?set DB_ROOT_PASSWORD}
+      MARIADB_DATABASE: ${DB_NAME:-ampache}
+      MARIADB_USER: ${AMPACHE_DB_USER:-ampache}
+      MARIADB_PASSWORD: ${AMPACHE_DB_PASSWORD:?set AMPACHE_DB_PASSWORD}
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  ampache-config:
+  ampache-log:
+  db-data:
